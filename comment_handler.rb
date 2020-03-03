@@ -33,7 +33,7 @@ class CommentHandler
     end
 
     mentions = content.flat_map do |cc|
-      cc.map { |c| c["attrs"]["id"] if c["type"] == "mention" }.compact
+      cc.filter_map { |c| c["attrs"]["id"] if c["type"] == "mention" }
     end
 
     return nil if mentions.empty?
