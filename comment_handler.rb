@@ -19,7 +19,8 @@ class CommentHandler
     unless resp.code.to_s.start_with? "2"
       # refresh token
       data = JSON.parse(resp.body)
-      if data[code] == 401
+      if data["code"] == 401
+        pp "Refreshing Tokens"
         refresh_resp = HTTParty.post(
           "https://auth.atlassian.com/oauth/token",
           body: {
@@ -32,6 +33,9 @@ class CommentHandler
         data = JSON.parse(refresh_resp.body)
         token = data["access_token"]
         redis.set "JIRA_TOKEN", token
+        redis.set "JIRA_REFRESH_TOKEN", data["refresh_token"]
+        pp "Refreshed Tokens"
+        pp data
 
         resp = HTTParty.get(url, headers: { "Authorization" => "Bearer #{token}" })
       end
