@@ -68,12 +68,12 @@ class App < Sinatra::Base
       redis.set "JIRA_ID", data[0]["id"]
       redis.set "JIRA_URL", data[0]["url"]
       if redis.get("SLACK_TOKEN")
-        "Alles gut jetzt!"
+        "Boom! Way to go."
       else
         url = "https://slack.com/oauth/v2/authorize?" \
               "client_id=#{settings.slack_client_id}" \
               "&scope=im:read,im:write,chat:write,commands"
-        "Alles gut! Now just go here: #{url}"
+        "s'all good man! Now just go here: #{url}"
       end
     else
       resp = HTTParty.get(
@@ -85,7 +85,7 @@ class App < Sinatra::Base
       redis.hset "subs", jira_account_id, { slack_id: slack_id }.to_json
       redis.hset "slack_ids_to_jira_ids", slack_id, jira_account_id
       name = data["name"]
-      [200, "You are signed up #{name}!"]
+      [200, "You are subcribed now, #{name}!"]
     end
   end
 
@@ -135,19 +135,7 @@ class App < Sinatra::Base
 
     return nil if mentions.empty?
 
-    text = content.flat_map do |cc|
-      cc.map do |c|
-        case c["type"]
-        when "text" then c["text"]
-        when "mention" then "@#{c['attrs']['text']}"
-        when "inlineCard" then c["attrs"]["url"]
-        when "hardBreak" then "\r\n"
-        else raise StandardError, "Unknown element #{c['type']}"
-        end
-      end
-    end.join.strip
-
-    [mentions.uniq, text]
+    [mentions.uniq, text_from_content(content)]
   end
 
   def send_message_to_slack(author:, issue:, mentions:, text:)
@@ -172,6 +160,20 @@ class App < Sinatra::Base
 
       raise StandardError, resp.body unless resp.code.to_s.start_with? "2"
     end
+  end
+
+  def text_from_content(content)
+    content.flat_map do |cc|
+      cc.map do |c|
+        case c["type"]
+        when "text" then c["text"]
+        when "mention" then "@#{c['attrs']['text']}"
+        when "inlineCard" then c["attrs"]["url"]
+        when "hardBreak" then "\r\n"
+        else raise StandardError, "Unknown element #{c['type']}"
+        end
+      end
+    end.join.strip
   end
 
   def process(issue_id, comment_id)
