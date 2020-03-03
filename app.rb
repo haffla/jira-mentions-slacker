@@ -126,58 +126,60 @@ class App < Sinatra::Base
 
   def process(issue_id, comment_id)
     Thread.new do
-      jira_id = redis.get "JIRA_ID"
-      token = redis.get "JIRA_TOKEN"
-      url = "https://api.atlassian.com/ex/jira/#{jira_id}/rest/api/3/issue/#{issue_id}/comment/#{comment_id}"
-      comment = JSON.parse(
-        HTTParty.get(
-          url,
-          headers: { "Authorization" => "Bearer #{token}" }
-        ).body
-      )
+      Raven.capture do
+        jira_id = redis.get "JIRA_ID"
+        token = redis.get "JIRA_TOKEN"
+        url = "https://api.atlassian.com/ex/jira/#{jira_id}/rest/api/3/issue/#{issue_id}/comment/#{comment_id}"
+        resp = HTTParty.get(url, headers: { "Authorization" => "Bearer #{token}" })
+        raise StandardError, resp.body unless resp.code.to_s.start_with? "2"
 
-      content = comment["body"]["content"].map do |c|
-        c["content"]
-      end
+        comment = JSON.parse(resp.body)
 
-      mentions = content.flat_map do |cc|
-        cc.map { |c| c["attrs"]["id"] if c["type"] == "mention" }.compact
-      end
+        content = comment["body"]["content"].map do |c|
+          c["content"]
+        end
 
-      if mentions.any?
-        text = content.flat_map do |cc|
-          cc.map do |c|
-            case c["type"]
-            when "text" then c["text"]
-            when "mention" then "@#{c['attrs']['text']}"
-            when "inlineCard" then c["attrs"]["url"]
-            when "hardBreak" then "\r\n"
-            else "OOPS_UNKNOWN_ELEMENT_IN: #{comment_id}"
+        mentions = content.flat_map do |cc|
+          cc.map { |c| c["attrs"]["id"] if c["type"] == "mention" }.compact
+        end
+
+        if mentions.any?
+          text = content.flat_map do |cc|
+            cc.map do |c|
+              case c["type"]
+              when "text" then c["text"]
+              when "mention" then "@#{c['attrs']['text']}"
+              when "inlineCard" then c["attrs"]["url"]
+              when "hardBreak" then "\r\n"
+              else "OOPS_UNKNOWN_ELEMENT_IN: #{comment_id}"
+              end
             end
+          end.join.strip
+
+          header = "#{comment['author']['displayName']} mentioned you in " \
+                   "<https://nerdgeschoss.atlassian.net/browse/#{issue_id}|*#{issue_id}*>."
+          mentions.uniq.each do |id|
+            sub = redis.hget "subs", id
+            next if sub.nil?
+
+            slack_id = JSON.parse(sub)["slack_id"]
+            slack_token = redis.get "SLACK_TOKEN"
+            resp = HTTParty.post(
+              "https://slack.com/api/chat.postMessage",
+              headers: {
+                "Authorization" => "Bearer #{slack_token}"
+              },
+              body: {
+                channel: slack_id,
+                text: header,
+                attachments: [
+                  { text: text }
+                ].to_json
+              }
+            )
+
+            raise StandardError, resp.body unless resp.code.to_s.start_with? "2"
           end
-        end.join.strip
-
-        header = "#{comment['author']['displayName']} mentioned you in " \
-                 "<https://nerdgeschoss.atlassian.net/browse/#{issue_id}|*#{issue_id}*>."
-        mentions.uniq.each do |id|
-          sub = redis.hget "subs", id
-          next if sub.nil?
-
-          slack_id = JSON.parse(sub)["slack_id"]
-          slack_token = redis.get "SLACK_TOKEN"
-          HTTParty.post(
-            "https://slack.com/api/chat.postMessage",
-            headers: {
-              "Authorization" => "Bearer #{slack_token}"
-            },
-            body: {
-              channel: slack_id,
-              text: header,
-              attachments: [
-                { text: text }
-              ].to_json
-            }
-          )
         end
       end
     end
