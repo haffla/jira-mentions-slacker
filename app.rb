@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-require 'sinatra'
-require 'redis'
-require 'cgi'
+require "sinatra"
+require "redis"
+require "cgi"
 
 class App < Sinatra::Base
   configure do
@@ -26,13 +26,15 @@ class App < Sinatra::Base
     }
     resp = HTTParty.post("https://slack.com/api/oauth.v2.access", query: query)
     data = JSON.parse(resp.body)
-    slack_id = data["authed_user"]["id"]
-    settings.redis.set "SLACK_TOKEN", data["access_token"]
+    # slack_id = data["authed_user"]["id"]
+    redis.set "SLACK_TOKEN", data["access_token"]
 
-    if jira_url = settings.redis.get("JIRA_URL")
+    if (jira_url = redis.get("JIRA_URL"))
       "Cool. You're all set! #{jira_url}"
     else
-      url = "https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=#{settings.jira_client_id}&scope=read%3Ajira-work&redirect_uri=#{CGI.escape(settings.jira_redirect_uri)}&response_type=code&prompt=consent"
+      url = "https://auth.atlassian.com/authorize?audience=api.atlassian.com" \
+            "&client_id=#{settings.jira_client_id}&scope=read%3Ajira-work" \
+            "&redirect_uri=#{CGI.escape(settings.jira_redirect_uri)}&response_type=code&prompt=consent"
       "Cool. Please authorize the Jira app now: #{url}"
     end
   end
@@ -55,7 +57,7 @@ class App < Sinatra::Base
     access_token = data["access_token"]
 
     if slack_id.nil?
-      settings.redis.set "JIRA_TOKEN", access_token
+      redis.set "JIRA_TOKEN", access_token
       resp = HTTParty.get(
         "https://api.atlassian.com/oauth/token/accessible-resources",
         headers: {
@@ -63,12 +65,14 @@ class App < Sinatra::Base
         }
       )
       data = JSON.parse(resp.body)
-      settings.redis.set "JIRA_ID", data[0]["id"]
-      settings.redis.set "JIRA_URL", data[0]["url"]
-      if slack_token = settings.redis.get("SLACK_TOKEN")
+      redis.set "JIRA_ID", data[0]["id"]
+      redis.set "JIRA_URL", data[0]["url"]
+      if redis.get("SLACK_TOKEN")
         "Alles gut jetzt!"
       else
-        url = "https://slack.com/oauth/v2/authorize?client_id=#{settings.slack_client_id}&scope=im:read,im:write,chat:write,commands"
+        url = "https://slack.com/oauth/v2/authorize?" \
+              "client_id=#{settings.slack_client_id}" \
+              "&scope=im:read,im:write,chat:write,commands"
         "Alles gut! Now just go here: #{url}"
       end
     else
@@ -78,8 +82,8 @@ class App < Sinatra::Base
       )
       data = JSON.parse(resp.body)
       jira_account_id = data["account_id"]
-      settings.redis.hset "subs", jira_account_id, { slack_id: slack_id }.to_json
-      settings.redis.hset "slack_ids_to_jira_ids", slack_id, jira_account_id
+      redis.hset "subs", jira_account_id, { slack_id: slack_id }.to_json
+      redis.hset "slack_ids_to_jira_ids", slack_id, jira_account_id
       name = data["name"]
       [200, "You are signed up #{name}!"]
     end
@@ -89,34 +93,41 @@ class App < Sinatra::Base
     redirect "/oauth?success=true"
   end
 
-  post '/:project_id/:issue_id/:comment_id' do
+  post "/:project_id/:issue_id/:comment_id" do
     process(params[:issue_id], params[:comment_id])
 
     200
   end
 
-  post '/sub' do
+  post "/sub" do
     slack_id = params[:user_id]
-    url = "https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=#{settings.jira_client_id}&scope=read%3Ame&redirect_uri=#{CGI.escape(settings.jira_redirect_uri)}&state=#{slack_id}&response_type=code&prompt=consent"
+    url = "https://auth.atlassian.com/authorize" \
+          "?audience=api.atlassian.com&client_id=#{settings.jira_client_id}" \
+          "&scope=read%3Ame&redirect_uri=#{CGI.escape(settings.jira_redirect_uri)}" \
+          "&state=#{slack_id}&response_type=code&prompt=consent"
     [200, url]
   end
 
-  delete '/unsub' do
+  delete "/unsub" do
     slack_id = params[:user_id]
-    jira_id = settings.redis.hget "slack_ids_to_jira_ids", slack_id
+    jira_id = redis.hget "slack_ids_to_jira_ids", slack_id
     if jira_id
-      settings.redis.hdel "subs", jira_id
-      settings.redis.hdel "slack_ids_to_jira_ids", slack_id
+      redis.hdel "subs", jira_id
+      redis.hdel "slack_ids_to_jira_ids", slack_id
       200
     else
       400
     end
   end
 
+  def redis
+    settings.redis
+  end
+
   def process(issue_id, comment_id)
     Thread.new do
-      jira_id = settings.redis.get "JIRA_ID"
-      token = settings.redis.get "JIRA_TOKEN"
+      jira_id = redis.get "JIRA_ID"
+      token = redis.get "JIRA_TOKEN"
       url = "https://api.atlassian.com/ex/jira/#{jira_id}/rest/api/3/issue/#{issue_id}/comment/#{comment_id}"
       comment = JSON.parse(
         HTTParty.get(
@@ -125,38 +136,39 @@ class App < Sinatra::Base
         ).body
       )
 
-      content = comment['body']['content'].map do |c|
-        c['content']
+      content = comment["body"]["content"].map do |c|
+        c["content"]
       end
 
       mentions = content.flat_map do |cc|
-        cc.map { |c| c['attrs']['id'] if c['type'] == 'mention' }.compact
+        cc.map { |c| c["attrs"]["id"] if c["type"] == "mention" }.compact
       end
 
       if mentions.any?
         text = content.flat_map do |cc|
           cc.map do |c|
-            case c['type']
-            when 'text' then c['text']
-            when 'mention' then "@#{c['attrs']['text']}"
-            when 'inlineCard' then c['attrs']['url']
-            when 'hardBreak' then "\r\n"
+            case c["type"]
+            when "text" then c["text"]
+            when "mention" then "@#{c['attrs']['text']}"
+            when "inlineCard" then c["attrs"]["url"]
+            when "hardBreak" then "\r\n"
             else "OOPS_UNKNOWN_ELEMENT_IN: #{comment_id}"
             end
           end
         end.join.strip
 
-        header = "#{comment['author']['displayName']} mentioned you in <https://nerdgeschoss.atlassian.net/browse/#{issue_id}|*#{issue_id}*>."
+        header = "#{comment['author']['displayName']} mentioned you in " \
+                 "<https://nerdgeschoss.atlassian.net/browse/#{issue_id}|*#{issue_id}*>."
         mentions.uniq.each do |id|
-          sub = settings.redis.hget 'subs', id
+          sub = redis.hget "subs", id
           next if sub.nil?
 
-          slack_id = JSON.parse(sub)['slack_id']
-          slack_token = settings.redis.get 'SLACK_TOKEN'
-          resp = HTTParty.post(
-            'https://slack.com/api/chat.postMessage',
+          slack_id = JSON.parse(sub)["slack_id"]
+          slack_token = redis.get "SLACK_TOKEN"
+          HTTParty.post(
+            "https://slack.com/api/chat.postMessage",
             headers: {
-              'Authorization' => "Bearer #{slack_token}"
+              "Authorization" => "Bearer #{slack_token}"
             },
             body: {
               channel: slack_id,
