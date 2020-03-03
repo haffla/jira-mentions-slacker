@@ -42,10 +42,10 @@ class CommentHandler
   end
 
   def send_message_to_slack(author:, mentions:, text:)
-    slack_token = store.slack_token
+    base_url = store.jira_url
     header = "#{author} mentioned you in " \
-             "<https://nerdgeschoss.atlassian.net/browse/#{issue_id}|*#{issue_id}*>."
-
+             "<#{base_url}/browse/#{issue_id}|*#{issue_id}*>."
+    slack_token = store.slack_token
     mentions.each do |id|
       sub = store.sub id
       next if sub.nil?
