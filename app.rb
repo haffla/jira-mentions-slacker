@@ -112,7 +112,7 @@ class App < Sinatra::Base
     [200, url]
   end
 
-  delete "/unsub" do
+  post "/unsub" do
     slack_id = params[:user_id]
     jira_id = settings.store.jira_id_by_slack_id slack_id
     if jira_id
