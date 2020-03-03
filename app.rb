@@ -35,9 +35,7 @@ class App < Sinatra::Base
     if (jira_url = settings.store.jira_url)
       "Cool. You're all set! #{jira_url}"
     else
-      url = "https://auth.atlassian.com/authorize?audience=api.atlassian.com" \
-            "&client_id=#{settings.jira_client_id}&scope=read%3Ajira-work%20offline_access" \
-            "&redirect_uri=#{CGI.escape(settings.jira_redirect_uri)}&response_type=code&prompt=consent"
+      url = JiraService.oauth_setup_url(client_id: settings.jira_client_id, redirect_uri: settings.jira_redirect_uri)
       "Cool. Please authorize the Jira app now: #{url}"
     end
   end
@@ -105,21 +103,20 @@ class App < Sinatra::Base
 
   post "/sub" do
     slack_id = params[:user_id]
-    url = "https://auth.atlassian.com/authorize" \
-          "?audience=api.atlassian.com&client_id=#{settings.jira_client_id}" \
-          "&scope=read%3Ame&redirect_uri=#{CGI.escape(settings.jira_redirect_uri)}" \
-          "&state=#{slack_id}&response_type=code&prompt=consent"
-    [200, url]
+    url = JiraService.oauth_subscribe_url(
+      client_id: settings.jira_client_id,
+      redirect_uri: settings.jira_redirect_uri,
+      slack_id: slack_id
+    )
+    "Cool! Just click <#{url}|*here*> and allow me to read your Jira profile."
   end
 
   post "/unsub" do
     slack_id = params[:user_id]
-    jira_id = settings.store.jira_id_by_slack_id slack_id
-    if jira_id
-      settings.store.remove_sub slack_id, jira_id
-      200
+    if settings.store.remove_sub(slack_id)
+      "I hate to see you go :("
     else
-      400
+      "I am sorry, but you haven't subsribed yet."
     end
   end
 

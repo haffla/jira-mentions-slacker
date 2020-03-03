@@ -39,4 +39,19 @@ class JiraService
 
     JSON.parse(resp.body)
   end
+
+  class << self
+    def oauth_setup_url(client_id:, redirect_uri:)
+      "https://auth.atlassian.com/authorize?audience=api.atlassian.com" \
+      "&client_id=#{client_id}&scope=read%3Ajira-work%20offline_access" \
+      "&redirect_uri=#{CGI.escape(redirect_uri)}&response_type=code&prompt=consent"
+    end
+
+    def oauth_subscribe_url(client_id:, redirect_uri:, slack_id:)
+      "https://auth.atlassian.com/authorize" \
+      "?audience=api.atlassian.com&client_id=#{client_id}" \
+      "&scope=read%3Ame&redirect_uri=#{CGI.escape(redirect_uri)}" \
+      "&state=#{slack_id}&response_type=code&prompt=consent"
+    end
+  end
 end

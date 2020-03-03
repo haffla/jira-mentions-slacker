@@ -64,8 +64,12 @@ class Store
     r.hget "slack_ids_to_jira_ids", slack_id
   end
 
-  def remove_sub(slack_id, jira_id)
+  def remove_sub(slack_id)
+    jira_id = jira_id_by_slack_id slack_id
+    return nil if jira_id.nil?
+
     r.hdel "slack_ids_to_jira_ids", slack_id
-    r.hdel "subs", jira_id
+    count = r.hdel "subs", jira_id
+    count == 1
   end
 end
