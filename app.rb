@@ -34,7 +34,7 @@ class App < Sinatra::Base
       "Cool. You're all set! #{jira_url}"
     else
       url = "https://auth.atlassian.com/authorize?audience=api.atlassian.com" \
-            "&client_id=#{settings.jira_client_id}&scope=read%3Ajira-work" \
+            "&client_id=#{settings.jira_client_id}&scope=read%3Ajira-work%20offline_access" \
             "&redirect_uri=#{CGI.escape(settings.jira_redirect_uri)}&response_type=code&prompt=consent"
       "Cool. Please authorize the Jira app now: #{url}"
     end
@@ -59,12 +59,13 @@ class App < Sinatra::Base
 
     if slack_id.nil?
       redis.set "JIRA_TOKEN", access_token
+      redis.set "JIRA_REFRESH_TOKEN", data["refresh_token"]
+
       resp = HTTParty.get(
         "https://api.atlassian.com/oauth/token/accessible-resources",
-        headers: {
-          "Authorization" => "Bearer #{access_token}"
-        }
+        headers: { "Authorization" => "Bearer #{access_token}" }
       )
+
       data = JSON.parse(resp.body)
       redis.set "JIRA_ID", data[0]["id"]
       redis.set "JIRA_URL", data[0]["url"]
@@ -128,7 +129,7 @@ class App < Sinatra::Base
   def process(issue_id, comment_id)
     Thread.new do
       Raven.capture do
-        CommentHandler.new(redis: redis, issue_id: issue_id, comment_id: comment_id).process
+        CommentHandler.new(issue_id: issue_id, comment_id: comment_id, settings: settings).process
       end
     end
   end

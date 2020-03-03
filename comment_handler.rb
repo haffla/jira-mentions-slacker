@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
 class CommentHandler
-  attr_reader :redis, :issue_id, :comment_id
+  attr_reader :issue_id, :comment_id, :settings
 
-  def initialize(redis:, issue_id:, comment_id:)
-    @redis = redis
+  def initialize(settings:, issue_id:, comment_id:)
+    @settings = settings
     @issue_id = issue_id
     @comment_id = comment_id
   end
@@ -15,6 +15,28 @@ class CommentHandler
 
     url = "https://api.atlassian.com/ex/jira/#{jira_id}/rest/api/3/issue/#{issue_id}/comment/#{comment_id}"
     resp = HTTParty.get(url, headers: { "Authorization" => "Bearer #{token}" })
+
+    unless resp.code.to_s.start_with? "2"
+      # refresh token
+      data = JSON.parse(resp.body)
+      if data[code] == 401
+        refresh_resp = HTTParty.post(
+          "https://auth.atlassian.com/oauth/token",
+          body: {
+            grant_type: "refresh_token",
+            client_id: settings.jira_client_id,
+            client_secret: settings.jira_client_secret,
+            refresh_token: redis.get("JIRA_REFRESH_TOKEN")
+          }
+        )
+        data = JSON.parse(refresh_resp.body)
+        token = data["access_token"]
+        redis.set "JIRA_TOKEN", token
+
+        resp = HTTParty.get(url, headers: { "Authorization" => "Bearer #{token}" })
+      end
+    end
+
     raise StandardError, resp.body unless resp.code.to_s.start_with? "2"
 
     comment = JSON.parse(resp.body)
@@ -29,6 +51,10 @@ class CommentHandler
   end
 
   private
+
+  def redis
+    settings.redis
+  end
 
   def data_from_comment(comment)
     content = comment["body"]["content"].map do |c|
