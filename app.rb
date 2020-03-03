@@ -4,12 +4,14 @@ require "sinatra"
 require "redis"
 require "cgi"
 require_relative "./comment_handler"
+require_relative "./jira_service"
+require_relative "./store"
 
 class App < Sinatra::Base
   configure do
     redirect_uri = ENV["REDIRECT_URI"]
 
-    set :redis, Redis.new
+    set :store, Store.new(redis: Redis.new)
     set :slack_redirect_uri, "#{redirect_uri}/oauth"
     set :slack_client_id, ENV["SLACK_CLIENT_ID"]
     set :slack_client_secret, ENV["SLACK_CLIENT_SECRET"]
@@ -28,9 +30,9 @@ class App < Sinatra::Base
     resp = HTTParty.post("https://slack.com/api/oauth.v2.access", query: query)
     data = JSON.parse(resp.body)
     # slack_id = data["authed_user"]["id"]
-    redis.set "SLACK_TOKEN", data["access_token"]
+    settings.store.save_slack_token data["access_token"]
 
-    if (jira_url = redis.get("JIRA_URL"))
+    if (jira_url = settings.store.jira_url)
       "Cool. You're all set! #{jira_url}"
     else
       url = "https://auth.atlassian.com/authorize?audience=api.atlassian.com" \
@@ -58,8 +60,8 @@ class App < Sinatra::Base
     access_token = data["access_token"]
 
     if slack_id.nil?
-      redis.set "JIRA_TOKEN", access_token
-      redis.set "JIRA_REFRESH_TOKEN", data["refresh_token"]
+      settings.store.save_jira_token access_token
+      settings.store.save_jira_refresh_token data["refresh_token"]
 
       resp = HTTParty.get(
         "https://api.atlassian.com/oauth/token/accessible-resources",
@@ -67,9 +69,9 @@ class App < Sinatra::Base
       )
 
       data = JSON.parse(resp.body)
-      redis.set "JIRA_ID", data[0]["id"]
-      redis.set "JIRA_URL", data[0]["url"]
-      if redis.get("SLACK_TOKEN")
+      settings.store.save_jira_id data[0]["id"]
+      settings.store.save_jira_url data[0]["url"]
+      if settings.store.slack_token
         "Boom! Way to go."
       else
         url = "https://slack.com/oauth/v2/authorize?" \
@@ -84,8 +86,8 @@ class App < Sinatra::Base
       )
       data = JSON.parse(resp.body)
       jira_account_id = data["account_id"]
-      redis.hset "subs", jira_account_id, { slack_id: slack_id }.to_json
-      redis.hset "slack_ids_to_jira_ids", slack_id, jira_account_id
+      settings.store.save_sub jira_account_id, { slack_id: slack_id }
+      settings.store.save_slack_jira_mapping slack_id, jira_account_id
       name = data["name"]
       [200, "You are subcribed now, #{name}!"]
     end
@@ -112,24 +114,33 @@ class App < Sinatra::Base
 
   delete "/unsub" do
     slack_id = params[:user_id]
-    jira_id = redis.hget "slack_ids_to_jira_ids", slack_id
+    jira_id = settings.store.jira_id_by_slack_id slack_id
     if jira_id
-      redis.hdel "subs", jira_id
-      redis.hdel "slack_ids_to_jira_ids", slack_id
+      settings.store.remove_sub slack_id, jira_id
       200
     else
       400
     end
   end
 
-  def redis
-    settings.redis
-  end
-
   def process(issue_id, comment_id)
     Thread.new do
       Raven.capture do
-        CommentHandler.new(issue_id: issue_id, comment_id: comment_id, settings: settings).process
+        jira_service = JiraService.new(
+          project_id: settings.store.jira_id,
+          token: settings.store.jira_token,
+          refresh_token: settings.store.jira_refresh_token,
+          client_id: settings.jira_client_id,
+          client_secret: settings.jira_client_secret,
+          store: settings.store
+        )
+
+        CommentHandler.new(
+          issue_id: issue_id,
+          comment_id: comment_id,
+          jira_service: jira_service,
+          store: settings.store
+        ).process
       end
     end
   end
