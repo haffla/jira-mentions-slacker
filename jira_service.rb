@@ -28,9 +28,9 @@ class JiraService
         }
       )
       data = JSON.parse(refresh_resp.body)
-      token = data["access_token"]
+      token, refresh_token = data.values_at "access_token", "refresh_token"
       store.save_jira_token token
-      store.save_jira_refresh_token data["refresh_token"]
+      store.save_jira_refresh_token refresh_token if refresh_token
       # now try again
       resp = HTTParty.get(url, headers: { "Authorization" => "Bearer #{token}" })
     end
