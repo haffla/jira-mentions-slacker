@@ -1,2 +1,1 @@
-workers 2
-preload_app!
+plugin "heroku"
