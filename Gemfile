@@ -10,7 +10,7 @@ gem "dotenv"
 gem "httparty", "~> 0.18.0"
 gem "redis", "~> 4.1"
 gem "sinatra"
-gem "thin"
+gem "puma"
 
 gem "rubocop", "~> 0.80.1", group: :development
 

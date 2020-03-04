@@ -11,6 +11,7 @@ class App < Sinatra::Base
   configure do
     redirect_uri = ENV["REDIRECT_URI"]
 
+    set :server, :puma
     set :store, Store.new(redis: Redis.new)
     set :slack_redirect_uri, "#{redirect_uri}/oauth"
     set :slack_client_id, ENV["SLACK_CLIENT_ID"]
@@ -75,7 +76,13 @@ class App < Sinatra::Base
         url = "https://slack.com/oauth/v2/authorize?" \
               "client_id=#{settings.slack_client_id}" \
               "&scope=im:read,im:write,chat:write,commands"
-        "s'all good man! Now just go here: #{url}"
+        button = <<~HTML
+          <a href="#{url}"><img alt="Add to Slack"\
+          height="40" width="139" src="https://platform.slack-edge.com/img/add_to_slack.png"\
+          srcset="https://platform.slack-edge.com/img/add_to_slack.png 1x,\
+          https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"></a>
+        HTML
+        erb "<p>'s all good man! And now please...</p><br><br>#{button}"
       end
     else
       resp = HTTParty.get(
@@ -89,10 +96,6 @@ class App < Sinatra::Base
       name = data["name"]
       [200, "You are subcribed now, #{name}!"]
     end
-  end
-
-  post "/oauth" do
-    redirect "/oauth?success=true"
   end
 
   post "/:project_id/:issue_id/:comment_id" do
