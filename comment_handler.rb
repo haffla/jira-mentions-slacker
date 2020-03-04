@@ -1,6 +1,20 @@
 # frozen_string_literal: true
 
 class CommentHandler
+  RULE = "-" * 35
+  ACCEPTED_TYPES = %w[
+    heading
+    paragraph
+    blockquote
+    panel
+    rule
+    text
+    emoji
+    mention
+    table
+    inline_card
+  ].freeze
+
   attr_reader :issue_id, :comment_id, :store, :jira_service
 
   def initialize(store:, issue_id:, comment_id:, jira_service:)
@@ -28,7 +42,7 @@ class CommentHandler
   private
 
   def data_from_comment(comment)
-    content = comment["body"]["content"].map do |c|
+    content = comment["body"]["content"].filter_map do |c|
       c["content"]
     end
 
@@ -38,7 +52,54 @@ class CommentHandler
 
     return nil if mentions.empty?
 
-    [mentions.uniq, text_from_content(content)]
+    [mentions.uniq, handle(comment["body"]["content"])]
+  end
+
+  def handle(d)
+    d.flat_map do |c|
+      type = c["type"].gsub(/(.)([A-Z])/, '\1_\2').downcase
+      send "handle_#{type}", c if ACCEPTED_TYPES.include? type
+    end.join.strip
+  end
+
+  def handle_heading(d)
+    "*" + handle(d["content"]) + "*\r\n"
+  end
+
+  def handle_text(d)
+    d["text"]
+  end
+
+  def handle_paragraph(d)
+    handle(d["content"]) + "\r\n"
+  end
+
+  def handle_mention(d)
+    "@" + d["attrs"]["text"]
+  end
+
+  def handle_emoji(d)
+    d["attrs"]["text"]
+  end
+
+  def handle_blockquote(d)
+    handle(d["content"]) + "\r\n"
+  end
+
+  def handle_panel(d)
+    handle(d["content"]) + "\r\n"
+  end
+
+  def handle_rule(_d)
+    RULE + "\r\n"
+  end
+
+  def handle_table(_)
+    "~ :question: ~\r\n"
+  end
+
+  def handle_inline_card(d)
+    d["attrs"]["url"]
   end
 
   def send_message_to_slack(author:, mentions:, text:)
@@ -63,19 +124,5 @@ class CommentHandler
 
       raise StandardError, resp.body unless resp.code.to_s.start_with? "2"
     end
-  end
-
-  def text_from_content(content)
-    content.flat_map do |cc|
-      cc.map do |c|
-        case c["type"]
-        when "text" then c["text"]
-        when "mention" then "@#{c['attrs']['text']}"
-        when "inlineCard" then c["attrs"]["url"]
-        when "hardBreak" then "\r\n"
-        else raise StandardError, "Unknown element #{c['type']}"
-        end
-      end
-    end.join.strip
   end
 end
