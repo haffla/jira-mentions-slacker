@@ -6,7 +6,7 @@ class JiraService
   attr_reader :project_id, :token, :refresh_token, :client_id, :client_secret, :store
 
   def initialize(client_id:, client_secret:, store:)
-    @project_id = store.project_id
+    @project_id = store.jira_id
     @token = store.jira_token
     @refresh_token = store.jira_refresh_token
     @client_id = client_id
