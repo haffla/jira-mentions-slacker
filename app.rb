@@ -31,9 +31,9 @@ class App < Sinatra::Base
     resp = HTTParty.post("https://slack.com/api/oauth.v2.access", query: query)
     data = JSON.parse(resp.body)
     # slack_id = data["authed_user"]["id"]
-    settings.store.save_slack_token data["access_token"]
+    store.save_slack_token data["access_token"]
 
-    if (jira_url = settings.store.jira_url)
+    if (jira_url = store.jira_url)
       "Cool. You're all set! #{jira_url}"
     else
       url = JiraService.oauth_setup_url(client_id: settings.jira_client_id, redirect_uri: settings.jira_redirect_uri)
@@ -59,8 +59,8 @@ class App < Sinatra::Base
     access_token = data["access_token"]
 
     if slack_id.nil?
-      settings.store.save_jira_token access_token
-      settings.store.save_jira_refresh_token data["refresh_token"]
+      store.save_jira_token access_token
+      store.save_jira_refresh_token data["refresh_token"]
 
       resp = HTTParty.get(
         "https://api.atlassian.com/oauth/token/accessible-resources",
@@ -68,9 +68,9 @@ class App < Sinatra::Base
       )
 
       data = JSON.parse(resp.body)
-      settings.store.save_jira_id data[0]["id"]
-      settings.store.save_jira_url data[0]["url"]
-      if settings.store.slack_token
+      store.save_jira_id data[0]["id"]
+      store.save_jira_url data[0]["url"]
+      if store.slack_token
         "Boom! Way to go."
       else
         url = "https://slack.com/oauth/v2/authorize?" \
@@ -91,8 +91,8 @@ class App < Sinatra::Base
       )
       data = JSON.parse(resp.body)
       jira_account_id = data["account_id"]
-      settings.store.save_sub jira_account_id, { slack_id: slack_id }
-      settings.store.save_slack_jira_mapping slack_id, jira_account_id
+      store.save_sub jira_account_id, { slack_id: slack_id }
+      store.save_slack_jira_mapping slack_id, jira_account_id
       name = data["name"]
       [200, "You are subcribed now, #{name}!"]
     end
@@ -116,32 +116,70 @@ class App < Sinatra::Base
 
   post "/unsub" do
     slack_id = params[:user_id]
-    if settings.store.remove_sub(slack_id)
+    if store.remove_sub(slack_id)
       "I hate to see you go :("
     else
       "I am sorry, but you haven't subsribed yet."
     end
   end
 
+  def store
+    settings.store
+  end
+
   def process(issue_id, comment_id)
     Thread.new do
       Raven.capture do
         jira_service = JiraService.new(
-          project_id: settings.store.jira_id,
-          token: settings.store.jira_token,
-          refresh_token: settings.store.jira_refresh_token,
+          project_id: store.jira_id,
+          token: store.jira_token,
+          refresh_token: store.jira_refresh_token,
           client_id: settings.jira_client_id,
           client_secret: settings.jira_client_secret,
-          store: settings.store
+          store: store
         )
 
-        CommentHandler.new(
+        comment = jira_service.fetch_comment(
           issue_id: issue_id,
-          comment_id: comment_id,
-          jira_service: jira_service,
-          store: settings.store
-        ).process
+          comment_id: comment_id
+        )
+
+        mentions, text, author = CommentHandler.process(comment)
+
+        send_message_to_slack(
+          author: author,
+          mentions: mentions,
+          text: text,
+          issue_id: issue_id
+        )
       end
+    end
+  end
+
+  # TODO: move to service
+  def send_message_to_slack(author:, mentions:, text:, issue_id:)
+    return if mentions.nil?
+
+    base_url = store.jira_url
+    header = "#{author} mentioned you in " \
+             "<#{base_url}/browse/#{issue_id}|*#{issue_id}*>."
+    slack_token = store.slack_token
+    mentions.each do |id|
+      sub = store.sub id
+      next if sub.nil?
+
+      slack_id = sub["slack_id"]
+      resp = HTTParty.post(
+        "https://slack.com/api/chat.postMessage",
+        headers: { "Authorization" => "Bearer #{slack_token}" },
+        body: {
+          channel: slack_id,
+          text: header,
+          attachments: [{ text: text }].to_json
+        }
+      )
+
+      raise StandardError, resp.body if resp.code >= 300
     end
   end
 end
