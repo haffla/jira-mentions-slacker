@@ -2,9 +2,9 @@
 
 require "sinatra"
 require "redis"
-require "cgi"
 require_relative "./comment_handler"
 require_relative "./jira_service"
+require_relative "./slack_service"
 require_relative "./store"
 
 class App < Sinatra::Base
@@ -22,16 +22,12 @@ class App < Sinatra::Base
   end
 
   get "/oauth" do
-    query = {
+    SlackService.new(
       client_id: settings.slack_client_id,
       client_secret: settings.slack_client_secret,
-      code: params[:code],
-      redirect_uri: settings.slack_redirect_uri
-    }
-    resp = HTTParty.post("https://slack.com/api/oauth.v2.access", query: query)
-    data = JSON.parse(resp.body)
-    # slack_id = data["authed_user"]["id"]
-    store.save_slack_token data["access_token"]
+      redirect_uri: settings.slack_redirect_uri,
+      store: store
+    ).request_access(code: params[:code])
 
     if (jira_url = store.jira_url)
       "Cool. You're all set! #{jira_url}"
@@ -45,55 +41,30 @@ class App < Sinatra::Base
     code = params[:code]
     slack_id = params[:state]
 
-    resp = HTTParty.post(
-      "https://auth.atlassian.com/oauth/token",
-      body: {
-        grant_type: "authorization_code",
-        client_id: settings.jira_client_id,
-        client_secret: settings.jira_client_secret,
-        code: code,
-        redirect_uri: settings.jira_redirect_uri
-      }
+    access_token, refresh_token = JiraService.request_access(
+      client_id: settings.jira_client_id,
+      client_secret: settings.jira_client_secret,
+      code: code,
+      redirect_uri: settings.jira_redirect_uri
     )
-    data = JSON.parse(resp.body)
-    access_token = data["access_token"]
 
     if slack_id.nil?
       store.save_jira_token access_token
-      store.save_jira_refresh_token data["refresh_token"]
+      store.save_jira_refresh_token refresh_token
+      id, url = JiraService.instance_details(access_token: access_token)
+      store.save_jira_id id
+      store.save_jira_url url
 
-      resp = HTTParty.get(
-        "https://api.atlassian.com/oauth/token/accessible-resources",
-        headers: { "Authorization" => "Bearer #{access_token}" }
-      )
-
-      data = JSON.parse(resp.body)
-      store.save_jira_id data[0]["id"]
-      store.save_jira_url data[0]["url"]
       if store.slack_token
         "Boom! Way to go."
       else
-        url = "https://slack.com/oauth/v2/authorize?" \
-              "client_id=#{settings.slack_client_id}" \
-              "&scope=im:read,im:write,chat:write,commands"
-        button = <<~HTML
-          <a href="#{url}"><img alt="Add to Slack"\
-          height="40" width="139" src="https://platform.slack-edge.com/img/add_to_slack.png"\
-          srcset="https://platform.slack-edge.com/img/add_to_slack.png 1x,\
-          https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"></a>
-        HTML
+        button = SlackService.oauth_button(settings.slack_client_id)
         erb "<p>'s all good man! And now please...</p><br><br>#{button}"
       end
     else
-      resp = HTTParty.get(
-        "https://api.atlassian.com/me",
-        headers: { "Authorization" => "Bearer #{access_token}" }
-      )
-      data = JSON.parse(resp.body)
-      jira_account_id = data["account_id"]
+      jira_account_id, name = JiraService.user_details(access_token: access_token)
       store.save_sub jira_account_id, { slack_id: slack_id }
       store.save_slack_jira_mapping slack_id, jira_account_id
-      name = data["name"]
       [200, "You are subcribed now, #{name}!"]
     end
   end
@@ -130,56 +101,22 @@ class App < Sinatra::Base
   def process(issue_id, comment_id)
     Thread.new do
       Raven.capture do
-        jira_service = JiraService.new(
-          project_id: store.jira_id,
-          token: store.jira_token,
-          refresh_token: store.jira_refresh_token,
+        comment = JiraService.new(
           client_id: settings.jira_client_id,
           client_secret: settings.jira_client_secret,
           store: store
-        )
-
-        comment = jira_service.fetch_comment(
-          issue_id: issue_id,
-          comment_id: comment_id
-        )
+        ).fetch_comment(issue_id: issue_id, comment_id: comment_id)
 
         mentions, text, author = CommentHandler.process(comment)
 
-        send_message_to_slack(
+        SlackService.send_message(
           author: author,
           mentions: mentions,
           text: text,
-          issue_id: issue_id
+          issue_id: issue_id,
+          store: store
         )
       end
-    end
-  end
-
-  # TODO: move to service
-  def send_message_to_slack(author:, mentions:, text:, issue_id:)
-    return if mentions.nil?
-
-    base_url = store.jira_url
-    header = "#{author} mentioned you in " \
-             "<#{base_url}/browse/#{issue_id}|*#{issue_id}*>."
-    slack_token = store.slack_token
-    mentions.each do |id|
-      sub = store.sub id
-      next if sub.nil?
-
-      slack_id = sub["slack_id"]
-      resp = HTTParty.post(
-        "https://slack.com/api/chat.postMessage",
-        headers: { "Authorization" => "Bearer #{slack_token}" },
-        body: {
-          channel: slack_id,
-          text: header,
-          attachments: [{ text: text }].to_json
-        }
-      )
-
-      raise StandardError, resp.body if resp.code >= 300
     end
   end
 end

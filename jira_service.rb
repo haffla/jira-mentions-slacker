@@ -1,12 +1,14 @@
 # frozen_string_literal: true
 
+require "cgi"
+
 class JiraService
   attr_reader :project_id, :token, :refresh_token, :client_id, :client_secret, :store
 
-  def initialize(project_id:, token:, refresh_token:, client_id:, client_secret:, store:)
-    @project_id = project_id
-    @token = token
-    @refresh_token = refresh_token
+  def initialize(client_id:, client_secret:, store:)
+    @project_id = store.project_id
+    @token = store.jira_token
+    @refresh_token = store.jira_refresh_token
     @client_id = client_id
     @client_secret = client_secret
     @store = store
@@ -52,6 +54,40 @@ class JiraService
       "?audience=api.atlassian.com&client_id=#{client_id}" \
       "&scope=read%3Ame&redirect_uri=#{CGI.escape(redirect_uri)}" \
       "&state=#{slack_id}&response_type=code&prompt=consent"
+    end
+
+    def request_access(client_id:, client_secret:, redirect_uri:, code:)
+      resp = HTTParty.post(
+        "https://auth.atlassian.com/oauth/token",
+        body: {
+          grant_type: "authorization_code",
+          client_id: client_id,
+          client_secret: client_secret,
+          code: code,
+          redirect_uri: redirect_uri
+        }
+      )
+      data = JSON.parse(resp.body)
+      data.values_at("access_token", "refresh_token")
+    end
+
+    def instance_details(access_token:)
+      resp = HTTParty.get(
+        "https://api.atlassian.com/oauth/token/accessible-resources",
+        headers: { "Authorization" => "Bearer #{access_token}" }
+      )
+      JSON.parse(resp.body).then do |data|
+        [data[0]["id"], data[0]["url"]]
+      end
+    end
+
+    def user_details(access_token:)
+      resp = HTTParty.get(
+        "https://api.atlassian.com/me",
+        headers: { "Authorization" => "Bearer #{access_token}" }
+      )
+      data = JSON.parse(resp.body)
+      data.values_at("account_id", "name")
     end
   end
 end
