@@ -16,3 +16,5 @@ gem "sinatra"
 gem "rubocop", "~> 0.80.1", group: :development
 
 gem "sentry-raven", "~> 3.0"
+
+gem "librato-rack", "~> 2.0"
