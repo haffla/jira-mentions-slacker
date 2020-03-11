@@ -10,7 +10,7 @@ class SlackService
     @redirect_uri = redirect_uri
   end
 
-  def request_access(code:, redirect_uri:)
+  def request_access(code:)
     query = {
       client_id: client_id,
       client_secret: client_secret,
