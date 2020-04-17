@@ -52,6 +52,8 @@ class Store
     JSON.parse(sub) if sub
   end
 
+  # id is jira account id
+  # payload contains the slack_id
   def save_sub(id, payload)
     r.hset "subs", id, payload.to_json
   end

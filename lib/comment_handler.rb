@@ -4,6 +4,8 @@ class CommentHandler
   RULE = "-" * 35
   ACCEPTED_TYPES = %w[
     inline_card
+    bullet_list
+    ordered_list
     blockquote
     paragraph
     mention
@@ -46,6 +48,10 @@ class CommentHandler
     end
 
     def handle_text(d)
+      link = (d["marks"] || []).find { |m| m["type"] == "link" }
+      href = link&.dig("attrs", "href")
+      return "<#{link['attrs']['href']}|#{d['text']}>" if href
+
       d["text"]
     end
 
@@ -79,6 +85,20 @@ class CommentHandler
 
     def handle_inline_card(d)
       d["attrs"]["url"]
+    end
+
+    def handle_bullet_list(d)
+      d["content"].map { |l| handle_list_item(l, "•") }.join("\r\n") + "\r\n"
+    end
+
+    def handle_ordered_list(d)
+      d["content"].map.with_index(1) do |l, i|
+        handle_list_item(l, "#{i}.")
+      end.join("\r\n") + "\r\n"
+    end
+
+    def handle_list_item(d, char)
+      "#{char} #{handle(d['content'])}"
     end
   end
 end

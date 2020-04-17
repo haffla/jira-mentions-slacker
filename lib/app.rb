@@ -33,7 +33,10 @@ class App < Sinatra::Base
       "Cool. You're all set! #{jira_url}"
     else
       url = JiraService.oauth_setup_url(client_id: settings.jira_client_id, redirect_uri: settings.jira_redirect_uri)
-      "Cool. Please authorize the Jira app now: #{url}"
+      here = <<~HTML
+        <a href="#{url}">here</a>
+      HTML
+      "Cool. Just click #{here} in order to authorize the Jira app."
     end
   end
 
@@ -77,12 +80,18 @@ class App < Sinatra::Base
 
   post "/sub" do
     slack_id = params[:user_id]
-    url = JiraService.oauth_subscribe_url(
-      client_id: settings.jira_client_id,
-      redirect_uri: settings.jira_redirect_uri,
-      slack_id: slack_id
-    )
-    "Cool! Just click <#{url}|*here*> and allow me to read your Jira profile."
+    jira_id = store.jira_id_by_slack_id slack_id
+    if jira_id
+      # We got the user's Slack ID and Jira ID
+      "You already subscribed mate!"
+    else
+      url = JiraService.oauth_subscribe_url(
+        client_id: settings.jira_client_id,
+        redirect_uri: settings.jira_redirect_uri,
+        slack_id: slack_id
+      )
+      "Cool! Just click <#{url}|*here*> and allow me to read your Jira profile."
+    end
   end
 
   post "/unsub" do
